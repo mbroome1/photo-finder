@@ -1,28 +1,82 @@
 require("dotenv").config();
+const express = require("express");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 const db = require("./../models");
 const User = db.user;
-const express = require("express");
-const bodyParser = require("body-parser");
+
+const passport = require("passport");
+const passportStrategy = require("./../config/passport");
 
 const app = express();
 
-// application/x-www-form-urlencoded post data
-// app.use(bodyParser.urlencoded({ extended: true }));
-app.use(bodyParser.json());
+app.use(express.json());
+passport.use(passportStrategy);
+app.use(passport.initialize());
 
 const port = process.env.PORT || 3000;
-app.get("", (req, res) => {
-  res.send({ Hello: "Theres" });
-});
 
-app.get("/users", async (req, res) => {
+app.get(
+  "/users",
+  passport.authenticate("jwt", { session: false }),
+  async (req, res) => {
+    try {
+      const users = await User.findAll({
+        attributes: ["id", "firstName", "lastName", "email"]
+      });
+      res.json(users);
+    } catch (e) {
+      res.status(500).send({ error: e.message });
+    }
+  }
+);
+app.get(
+  "/user",
+  passport.authenticate("jwt", { session: false }),
+  (req, res) => {
+    if (req.user) {
+      console.log(req.user);
+      res.status(200).send({ user: req.user });
+    } else {
+      res.status(404).send({ error: "No req.user found" });
+    }
+  }
+);
+
+app.post("/login", async (req, res) => {
+  const email = req.body.email;
+  const password = req.body.password;
   try {
-    const users = await User.findAll({
-      attributes: ["id", "firstName", "lastName", "email"]
+    const user = await User.findOne({
+      where: {
+        email: email
+      }
     });
-    res.json(users);
+    if (!user) {
+      const error = new Error("Invalid email");
+      error.statusCode = 401;
+      throw error;
+    }
+
+    const isEqual = await bcrypt.compare(password, user.password);
+
+    if (!isEqual) {
+      const error = new Error("Wrong password!");
+      error.statusCode = 401;
+      throw error;
+    }
+
+    const token = jwt.sign(
+      {
+        email: user.email,
+        sub: user.id
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "1h" }
+    );
+    res.status(200).json({ token: token, sub: user.id });
   } catch (e) {
-    res.status(500).send({ error: e });
+    res.status(400).json({ error: e.message });
   }
 });
 
@@ -38,10 +92,13 @@ app.patch("/user/:id", async (req, res) => {
     user.save();
     await res.json(user);
   } catch (e) {
-    res.status(500).send({ error: e });
+    res.status(500).send({ error: e.message });
   }
 });
 
+app.get("", (req, res) => {
+  res.send({ Default: "This is the default route" });
+});
 app.listen(port, () => {
   console.log("server is listening on port " + port);
 });
